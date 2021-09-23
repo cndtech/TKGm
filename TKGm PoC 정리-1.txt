@@ -1,0 +1,379 @@
+1. my.vmware.com 에서 tkg-v1.3.0 bundle / kubectl-cli-v1.20.4 / tkg-extensions-manifests-v1.3.0 다운로드
+
+2. tanzu cli .tar 압축해제 후 cli plugin 설치 / kubectl-cli.tar.gz 압축해제 후 path 에 적용
+# cp tanzu-core-linux_amd64 /usr/local/bin/tanzu 
+# tanzu plugin list 
+# tanzu plugin install --local cli all
+
+** 중요한 점: tanzu cli version 이 v1.3.0 or v1.3.1 에 따라 management-cluster UI 로 설치할 때 호환되는 OS-Image를 선택하라고 선택지에 확인할 수 있다 
+--> 저번에는 cache 가 남아있는 줄 알았지만 cache 문제가 아닌 tanzu cli version 의 문제였다
+
+# gzip -d kubectl-cli-v1.20.4 
+# cp kubectl-cli-v1.20.4 /usr/local/bin/kubectl
+
+3. TKG installer ui bootstrap 과 연동  
+# tanzu management-cluster create --ui --binde 172.19.16.111:5555 --browser none 
+
+5. management-cluster 조회 및 상태 확인  
+# tanzu management-cluster get 
+
+6. TKG Cluster 로그인  
+# tanzu login  --> 방향키로 선택가능 
+
+7. admin 권한으로된 management-cluster context를 kubeConfig 저장
+# tanzu management-cluster kubeconfig get --admin
+
+8. context management-cluster context 로 바꿈 
+# kubectl config use-context <tkg management-cluster context>
+
+--> management-cluster 가 생성되면 .tanzu/ 디렉토리가 자동으로 생성되며 .tanzu/tkg/clusterconfigs/ 경로에 management-cluster.yaml 파일이 있다
+--> management-cluster.yaml를 tkc-cluster.yaml 로 복사 
+--> VSPHERE_CONTROL_PLANE_ENDPOINT 변경 --> endpoint의 범위는 bootstrap에 설치된 dhcp 서버에 적용한 ip pool에는 벗어나지만 같은 subnet의 ip로 지정해야한다 
+--> --tkr=<tkc-version>은 tanzu kubernetes-release get 에서 tkg version과 호환되는 tkc 버전을 선택
+
+9. workload cluster / tkc 클러스터 생성
+# tanzu cluster create <tkc-name> --plan=dev/prod --tkr=<tkc-version> -f /root/.tanzu/tkg/clusterconfigs/<tkc-config.-name>
+
+10. tanzu cluster get list --include-management-cluster / kubectl get machines 명령어로 생성된 workload cluster 조회 및 상태확인 
+
+11. admin 권한으로된 workload-cluster context를 kubeConfig에 저장
+# tanzu cluster kubeconfig get <9번에서 지정한 tkc-name> --admin
+
+12. context workload-cluster context로 바꿈 
+# kubectl config use-context <workload-cluster context>
+
+13. extensions-manifests.tar.gz 압축파일 압축해제
+# tar -xsvf <extensions-manifests 압축파일> 
+
+14-1. cert-manager에 필요한 리소스 배포
+# kubectl apply -f cert-manager/
+-> 디렉토리 전체
+
+14-2. kubectl get all -n cert-manager
+
+
+EXTENSION 배포 
+16-1. contour 네임스페이스 생성 
+# extensions/ingress/contour   kubectl apply -f namespace-role.yaml
+
+16-2. contour-data-values 시크릿 생성
+# kubectl create secret generic contour-data-values -n tanzu-system-ingress --from-file=values.yaml=$HOME/data/extensions/ingress/contour/vsphere/contour-data-values.yaml
+
+16-3. contour-data-values 조회  
+# kubectl get secret contour-data-values -n tanzu-system-ingress -o 'go-template={{ index .data "values.yaml" }}' | base64 -d
+
+16-4. contour-data-values 업데이트 (contour-data-values 변경사항이 있을 경우)
+# kubectl create secret generic contour-data-values --from-file=values.yaml=$HOME/data/extensions/ingress/contour/vsphere/contour-data-values.yaml -n tanzu-system-ingress -o yaml --dry-run=client | kubectl replace -f -
+
+17-1. contour-extensions 배포 
+# kubectl apply -f  contour-extension.yaml
+
+17-2. app / contour 리소스 실시간 조회 
+# watch kubectl get app contour -n tanzu-system-ingress
+# watch kubectl get all -n tanzu-system-ingress 
+
+17-3. 외부 ip 조회 
+# kubectl get svc -n tanzu-system-ingress
+--> envoy     LoadBalancer   100.66.167.152   172.19.16.64   80:30072/TCP,443:30563/TCP   22h
+
+
+Extension - harbor 배포 
+
+1. 네임스페이스 및 harbor 배포 시 필요한 리소스 배포 
+extensions/registry/harbor# kubectl apply -f namespace.yaml
+
+2. harbor-data-values 시크릿 생성 
+2-1. example 파일 복사 
+# cp harbor-data-values.yaml.example harbor-data-values.yaml
+
+2-2. generate-passwords.sh* 스크립 파일 실행 
+# . generate-passwords.sh*
+** 캡쳐
+
+2-3. 실행된 스크립트 결과값 harbor-data-values.yaml 에 동일한 필드에 값 넣기 
+# vi harbor-data-values.yaml
+
+-->harbor FQDN 값 넣어줘야함 
+--> admin pw 설정
+** 캡쳐 첨부
+
+
+2-4. harbor-data-values 시크릿 생성 
+# kubectl create secret generic harbor-data-values -n tanzu-system-registry --from-file=values.yaml=/root/data/extensions/registry/harbor/harbor-data-values.yaml
+
+2-5. 생성한 시크릿 내용확인 
+# kubectl get secret harbor-data-values -n tanzu-system-registry -o 'go-template={{ index .data "values.yaml" }}' | base64 -d
+
+2-6. harbor-data-values 업데이트 (수정 내용 있을 시)
+# kubectl create secret generic harbor-data-values --from-file=values.yaml=$HOME/extensions/registry/harbor/harbor-data-values.yaml -n tanzu-system-registry -o yaml --dry-run=client | kubectl replace -f -
+
+3. harbor 배포 
+# kubectl apply -f harbor-extension.yaml
+
+4. app / 리소스 조회 
+# kubectl get app harbor -n tanzu-system-registry 
+# kubectl get all -n tanzu-system-registry
+
+** 캡쳐 첨부 
+
+5. https://<harbor FQDN>
+--> 로그인 default-username은 admin
+--> pw 는 harbor-data-value 에서 지정한 비번 사용 
+**캡쳐 첨부 
+
+prometheus / grafana 배포는 contour와 harbor를 배포하는 방식이 같지만 브라우저에 UI 띄우기 위해서는 httpproxy 리소스 생성 필요
+Prometheus 용 httpproxy.yaml 생성 
+# vi httpproxy.yaml
+---
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: pro-httpproxy
+  namespace: tanzu-system-monitoring
+spec:
+  virtualhost:
+    fqdn: nirs-pro.cnd.lab
+    # tls:
+    #  secretName: cnd-tls/wild-tls  --> 인증서 부재시 주석처리 
+  routes:
+  - services:
+    - name: prometheus-alertmanager
+      port: 80
+    conditions:
+    - prefix: /pro/alt
+    pathRewritePolicy:
+      replacePrefix:
+      - prefix: /pro/alt
+        replacement: /
+  - services:
+    - name: prometheus-node-exporter
+      port: 9100
+    conditions:
+    - prefix: /pro/exp
+    pathRewritePolicy:
+      replacePrefix:
+      - prefix: /pro/exp
+        replacement: /
+  - services:
+    - name: prometheus-server
+      port: 80
+    conditions:
+    - prefix: /pro
+    pathRewritePolicy:
+      replacePrefix:
+      - prefix: /pro
+        replacement: /graph
+  - services:
+    - name: prometheus-pushgateway
+      port: 9091
+    conditions:
+    - prefix: /pro/pg
+    pathRewritePolicy:
+      replacePrefix:
+      - prefix: /pro/pg
+        replacement: /
+
+
+Grafana 용 httpproxy.yaml
+# vi httpproxy.yaml
+---
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: gra-httpproxy
+  namespace: tanzu-system-monitoring
+spec:
+  virtualhost:
+    fqdn: nirs-gra.cnd.lab
+    #tls:
+    #  secretName: cnd-tls/wild-tls
+  routes:
+  - services:
+    - name: grafana
+      port: 80
+    conditions:
+    - prefix: /
+
+httpproxy 배포 
+# kubectl apply -f httpproxy.yaml
+
+위에 명시한 FQDN을 이용하여 브라우저에서 접속 
+http://<FQDN>
+
+Fluent-Bit vrli 와 연동 
+
+1. Vrli 설치 
+
+2. 네임스페이스 배포
+# kubectl apply -f namespace.yaml
+
+3. fluent-data-values 시크릿 생성  
+
+3-1. example 파일 복사 
+extensions/logging/fluent-bit/elasticsearch# cp fluent-bit-data-values.yaml.example fluent-bit-data-values.yaml
+
+3-2. fluent-bit-data-values.yaml 에 생성 시 필요한 정보 기입 
+** 캡쳐 첨부 
+
+-> instance_name: <TKG cluster name>
+-> cluster_name: <TKC cluster name>
+
+3-3. fluent-bit-data-values 시크릿 생성 후 조회 및 업데이트 
+생성
+# kubectl create secret generic fluent-bit-data-values -n tanzu-system-logging --from-file=values.yaml=$HOME/extensions/logging/fluent-bit/elasticsearch/fluent-bit-data-values-syslog.yaml
+
+조회 
+# kubectl get secret fluent-bit-data-values -n tanzu-system-logging -o 'go-template={{ index .data "values.yaml" }}' | base64 -d
+
+업데이트 
+#kubectl create secret generic fluent-bit-data-values --from-file=values.yaml=$HOME/extensions/logging/fluent-bit/elasticsearch/fluent-bit-data-values-syslog.yaml -n tanzu-system-logging -o yaml --dry-run=client | kubectl replace -f -
+
+4. fluent-bit 배포 
+# kubectl apply -f fluent-bit-extension.yaml 
+
+apiVersion: clusters.tmc.cloud.vmware.com/v1alpha1
+kind: Extension
+metadata:
+  name: fluent-bit
+  namespace: tanzu-system-logging
+  annotations:
+    tmc.cloud.vmware.com/managed: "false"
+spec:
+  description: fluent-bit
+  version: "v1.6.9_vmware.1"
+  name: fluent-bit
+  namespace: tanzu-system-logging
+  deploymentStrategy:
+    type: KUBERNETES_NATIVE
+  objects: |
+    apiVersion: kappctrl.k14s.io/v1alpha1
+    kind: App
+    metadata:
+      name: fluent-bit
+      annotations:
+        tmc.cloud.vmware.com/orphan-resource: "true"
+    spec:
+      syncPeriod: 5m
+      serviceAccountName: fluent-bit-extension-sa
+      fetch:
+        - image:
+            url: projects.registry.vmware.com/tkg/tkg-extensions-templates:v1.3.0_vmware.1
+      template:
+        - ytt:
+            paths:
+              - tkg-extensions/common
+              - tkg-extensions/logging/fluent-bit
+            inline:
+              paths:
+                update-config-map.yaml: |
+                  #@ load("@ytt:overlay", "overlay")
+                  #@overlay/match by=overlay.subset({"kind": "ConfigMap", "metadata": {"name": "fluent-bit-config"}})
+                  ---
+                  data:
+                    output-elasticsearch.conf: |
+                      [OUTPUT]
+                          Name syslog
+                          Match *
+                          Host 172.19.16.150
+                          Port 514
+                          Mode tcp
+                          Syslog_Format rfc5424
+                          Syslog_Hostname_key tkg_cluster
+                          Syslog_Appname_key pod_name
+                          Syslog_Procid_key container_name
+                          Syslog_Message_key message
+                          Syslog_sd_key dockerid=docker_id
+              pathsFrom:
+                - secretRef:
+                    name: fluent-bit-data-values
+      deploy:
+        - kapp:
+            rawOptions: ["--wait-timeout=5m"]
+
+
+5. 배포 확인 
+# kubectl get all -n tanzu-system-logging
+
+6. vrli 접속 
+http://<vrli FQDN>
+
+** fluent-bit이랑 연동을 해야 Vrli에서 cluster와 cluster에 존재하는 리소스 로그 확인가능하다 
+
+
+
+velero 
+
+1. velero cli / velero-plugin / velero 에 관련된 bundel 다운로드 
+a) velero cli -> my.vmware.com
+b) velero-plugin -> https://github.com/vmware-tanzu/velero-plugin-for-aws/releases/tag/v1.1.0
+c) velero bundle -> https://github.com/vmware-tanzu/velero/releases/tag/v1.5.4
+
+2. velero cli 파일 압축해제 후 지정된 path 에  복사 
+2-1. 다운로드 받은 cli 압축해제 
+# gzip -d velero-linux-v1.6.0_vmware.1.gz
+
+2-2 cli 압축해제 파일 path 에 복사 
+# cp velero-linux-v1.5.4_vmware.1 /usr/local/bin/velero 
+
+2-2-1. cli version 확인 
+# velero version
+
+2-3. velero plugin 압축해제 
+# tar -xsvf velero-plugin-for-aws-1.1.0.tar.gz
+
+2-4. velero bundel 압축해제 
+# tar -xsvf velero-1.5.4.tar.gz
+
+3. object storage 솔루션인 minio 서버 배포 및 velero 서버와 연동
+**2-4 에서 압축해제하면 생성되는 velero-1.5.4/ 디렉토리에서 진행 
+
+3-1. minio 서버 배포 
+/velero-1.5.4/examples/minio# kubectl apply -f 00-minio-deployment.yaml
+
+3-2. minio 서버에 접속 시 사용할 credential file EOF 사용하여 생성 
+# cat > /tmp/credentials-velero <<EOF
+   [default]
+   aws_access_key_id=$AWS_ACCESS_ID
+   aws_secret_access_key=$AWS_ACCESS_KEY
+   EOF
+
+3-3. velero 서버 설치 
+# velero install \
+--provider aws \
+--plugins velero/velero-plugin-for-aws:v1.1.0 \
+--bucket velero \
+--secret-file /tmp/credentials-velero \
+--use-volume-snapshots=false \
+--backup-location-config region=minio,s3ForcePathStyle="true",s3Url=http://minio.velero.svc:9000
+
+3-4. velero 리소스 조회 및 상태 확인 
+# kubectl get all -n velero 
+
+3-4-1. velero 버전확인 
+# velero version 
+
+4. velero 를 이용한 Back-up & Restore
+사전준비 
+- 백업할 테스트 네임스페이스, 리소스 배포 
+  --> kubectl create ns test / kubectl run test-pod --image nginx:1.18 -n test 
+
+Back-up 
+1. 백업 생성
+# velero backup create <back-up file name> --<옵션>
+eg) velero backup create test-backup --include-namespaces test 
+--> 사전에 만들어놓은 test 네임스페이스 전체를 백업한다 
+
+2. 생성한 백업 조회 
+# velero backup get 
+
+Restore
+사전준비 
+- 백업으로 만든 test 네임스페이스 삭제 
+  --> kubectl delete ns test
+
+1. 복원 생성 
+# velero restore create --from-backup <back-up file name>
+
+2. 복원한 리소스 조회 
+# kubectl get ns 
+# kubectl get all -n test 
